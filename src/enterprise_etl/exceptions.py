@@ -7,3 +7,6 @@ class EnterpriseETLError(Exception):
 
 class ConfigurationError(EnterpriseETLError):
     """Raised when application configuration is missing or invalid."""
+
+class DataIngestionError(EnterpriseETLError):
+    """Raised when data cannot be ingested from a source."""
