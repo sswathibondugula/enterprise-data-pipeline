@@ -10,3 +10,6 @@ class ConfigurationError(EnterpriseETLError):
 
 class DataIngestionError(EnterpriseETLError):
     """Raised when data cannot be ingested from a source."""
+
+class DataValidationError(EnterpriseETLError):
+    """Raised when data fails validation rules."""
