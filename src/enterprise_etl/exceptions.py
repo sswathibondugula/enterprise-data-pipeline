@@ -13,3 +13,9 @@ class DataIngestionError(EnterpriseETLError):
 
 class DataValidationError(EnterpriseETLError):
     """Raised when data fails validation rules."""
+
+class DatabaseConnectionError(EnterpriseETLError):
+    """Raised when the application cannot connect to the database."""
+
+class DatabaseLoadError(EnterpriseETLError):
+    """Raised when data cannot be loaded into the database."""
