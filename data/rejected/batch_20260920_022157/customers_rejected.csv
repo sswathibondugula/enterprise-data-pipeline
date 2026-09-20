@@ -1,0 +1,2 @@
+customer_id,name,country,rejection_reason,batch_id,source_name,rejected_at
+,Ravi,India,customer_id is required,batch_20260920_022157,customers.csv,2026-09-20 02:21:59.136513+00:00
