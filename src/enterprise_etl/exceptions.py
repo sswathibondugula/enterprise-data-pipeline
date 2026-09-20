@@ -19,3 +19,6 @@ class DatabaseConnectionError(EnterpriseETLError):
 
 class DatabaseLoadError(EnterpriseETLError):
     """Raised when data cannot be loaded into the database."""
+
+class DatabaseAuditError(EnterpriseETLError):
+    """Raised when pipeline audit information cannot be stored."""

@@ -15,6 +15,9 @@ from enterprise_etl.database.connection import (
 from enterprise_etl.database.customer_staging_loader import (
     CustomerStagingLoader,
 )
+from enterprise_etl.database.pipeline_run_repository import (
+    PipelineRunRepository,
+)
 from enterprise_etl.ingestion.csv_reader import CsvReader
 from enterprise_etl.ingestion.raw_landing import RawLandingStore
 from enterprise_etl.orchestration.customer_pipeline import (
@@ -38,7 +41,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def main() -> None:
-    """Build and execute the customer pipeline."""
+    """Build, audit, and execute the customer pipeline."""
     source_path = (
         PROJECT_ROOT
         / "data"
@@ -58,6 +61,14 @@ def main() -> None:
     engine = create_database_engine(database_config)
 
     test_database_connection(engine)
+
+    run_repository = PipelineRunRepository(engine)
+
+    run_id = run_repository.start_run(
+        batch_id=batch_id,
+        pipeline_name="customer_pipeline",
+        source_name=source_path.name,
+    )
 
     pipeline = CustomerPipeline(
         raw_store=RawLandingStore(raw_root),
@@ -84,22 +95,71 @@ def main() -> None:
         staging_loader=CustomerStagingLoader(engine),
     )
 
-    result = pipeline.run(
-        source_path=source_path,
-        batch_id=batch_id,
-    )
+    try:
+        result = pipeline.run(
+            source_path=source_path,
+            batch_id=batch_id,
+        )
 
-    print()
-    print("Customer pipeline completed successfully.")
-    print(f"Batch ID: {batch_id}")
-    print(f"Raw file: {result.raw_path}")
-    print(f"Eligible records: {len(result.eligible_records)}")
-    print(f"Rejected records: {len(result.rejected_records)}")
-    print(f"Excluded records: {len(result.excluded_records)}")
-    print(f"Loaded records: {result.loaded_records}")
+        valid_records = (
+            len(result.eligible_records)
+            + len(result.excluded_records)
+        )
 
-    if result.rejected_path is not None:
-        print(f"Rejected file: {result.rejected_path}")
+        total_records = (
+            valid_records
+            + len(result.rejected_records)
+        )
+
+        run_repository.mark_success(
+            run_id=run_id,
+            total_records=total_records,
+            valid_records=valid_records,
+            rejected_records=len(
+                result.rejected_records
+            ),
+            excluded_records=len(
+                result.excluded_records
+            ),
+        )
+
+        print()
+        print("Customer pipeline completed successfully.")
+        print(f"Run ID: {run_id}")
+        print(f"Batch ID: {batch_id}")
+        print(f"Raw file: {result.raw_path}")
+        print(
+            f"Eligible records: "
+            f"{len(result.eligible_records)}"
+        )
+        print(
+            f"Rejected records: "
+            f"{len(result.rejected_records)}"
+        )
+        print(
+            f"Excluded records: "
+            f"{len(result.excluded_records)}"
+        )
+        print(
+            f"Loaded records: "
+            f"{result.loaded_records}"
+        )
+
+        if result.rejected_path is not None:
+            print(
+                f"Rejected file: "
+                f"{result.rejected_path}"
+            )
+
+    except Exception as exc:
+        run_repository.mark_failed(
+            run_id=run_id,
+            error_message=str(exc),
+        )
+        raise
+
+    finally:
+        engine.dispose()
 
 
 if __name__ == "__main__":
