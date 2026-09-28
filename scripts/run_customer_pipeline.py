@@ -6,11 +6,16 @@ from pathlib import Path
 from enterprise_etl.business_rules.customer_rules import (
     CustomerBusinessRules,
 )
-from enterprise_etl.cleaning.customer_cleaner import CustomerDataCleaner
+from enterprise_etl.cleaning.customer_cleaner import (
+    CustomerDataCleaner,
+)
 from enterprise_etl.database.connection import (
     DatabaseConfig,
     create_database_engine,
     test_database_connection,
+)
+from enterprise_etl.database.customer_dimension_loader import (
+    CustomerDimensionLoader,
 )
 from enterprise_etl.database.customer_staging_loader import (
     CustomerStagingLoader,
@@ -41,7 +46,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def main() -> None:
-    """Build, audit, and execute the customer pipeline."""
+    """Build, audit, and execute the customer ETL pipeline."""
+
     source_path = (
         PROJECT_ROOT
         / "data"
@@ -49,8 +55,17 @@ def main() -> None:
         / "customers.csv"
     )
 
-    raw_root = PROJECT_ROOT / "data" / "raw"
-    rejected_root = PROJECT_ROOT / "data" / "rejected"
+    raw_root = (
+        PROJECT_ROOT
+        / "data"
+        / "raw"
+    )
+
+    rejected_root = (
+        PROJECT_ROOT
+        / "data"
+        / "rejected"
+    )
 
     batch_id = datetime.now(timezone.utc).strftime(
         "batch_%Y%m%d_%H%M%S"
@@ -58,11 +73,17 @@ def main() -> None:
 
     database_config = DatabaseConfig.from_environment()
 
-    engine = create_database_engine(database_config)
+    engine = create_database_engine(
+        database_config
+    )
 
-    test_database_connection(engine)
+    test_database_connection(
+        engine
+    )
 
-    run_repository = PipelineRunRepository(engine)
+    run_repository = PipelineRunRepository(
+        engine
+    )
 
     run_id = run_repository.start_run(
         batch_id=batch_id,
@@ -71,7 +92,9 @@ def main() -> None:
     )
 
     pipeline = CustomerPipeline(
-        raw_store=RawLandingStore(raw_root),
+        raw_store=RawLandingStore(
+            raw_root
+        ),
         csv_reader=CsvReader(),
         schema_validator=DataFrameSchemaValidator(
             required_columns=(
@@ -92,7 +115,12 @@ def main() -> None:
                 "India",
             )
         ),
-        staging_loader=CustomerStagingLoader(engine),
+        staging_loader=CustomerStagingLoader(
+            engine
+        ),
+        dimension_loader=CustomerDimensionLoader(
+            engine
+        ),
     )
 
     try:
@@ -124,25 +152,45 @@ def main() -> None:
         )
 
         print()
-        print("Customer pipeline completed successfully.")
-        print(f"Run ID: {run_id}")
-        print(f"Batch ID: {batch_id}")
-        print(f"Raw file: {result.raw_path}")
+        print(
+            "Customer pipeline completed successfully."
+        )
+
+        print(
+            f"Run ID: {run_id}"
+        )
+
+        print(
+            f"Batch ID: {batch_id}"
+        )
+
+        print(
+            f"Raw file: {result.raw_path}"
+        )
+
         print(
             f"Eligible records: "
             f"{len(result.eligible_records)}"
         )
+
         print(
             f"Rejected records: "
             f"{len(result.rejected_records)}"
         )
+
         print(
             f"Excluded records: "
             f"{len(result.excluded_records)}"
         )
+
         print(
             f"Loaded records: "
             f"{result.loaded_records}"
+        )
+
+        print(
+            f"Warehouse records affected: "
+            f"{result.warehouse_records}"
         )
 
         if result.rejected_path is not None:
@@ -156,6 +204,7 @@ def main() -> None:
             run_id=run_id,
             error_message=str(exc),
         )
+
         raise
 
     finally:

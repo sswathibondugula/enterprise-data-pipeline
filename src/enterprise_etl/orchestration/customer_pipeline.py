@@ -8,7 +8,15 @@ import pandas as pd
 from enterprise_etl.business_rules.customer_rules import (
     CustomerBusinessRules,
 )
-from enterprise_etl.cleaning.customer_cleaner import CustomerDataCleaner
+from enterprise_etl.cleaning.customer_cleaner import (
+    CustomerDataCleaner,
+)
+from enterprise_etl.database.customer_dimension_loader import (
+    CustomerDimensionLoader,
+)
+from enterprise_etl.database.customer_staging_loader import (
+    CustomerStagingLoader,
+)
 from enterprise_etl.exceptions import DataValidationError
 from enterprise_etl.ingestion.csv_reader import CsvReader
 from enterprise_etl.ingestion.raw_landing import RawLandingStore
@@ -18,13 +26,13 @@ from enterprise_etl.transformation.customer_transformer import (
 from enterprise_etl.validation.record_validator import (
     CustomerRecordValidator,
 )
-from enterprise_etl.validation.rejected_store import RejectedRecordStore
+from enterprise_etl.validation.rejected_store import (
+    RejectedRecordStore,
+)
 from enterprise_etl.validation.schema_validator import (
     DataFrameSchemaValidator,
 )
-from enterprise_etl.database.customer_staging_loader import (
-    CustomerStagingLoader,
-)
+
 
 @dataclass
 class CustomerPipelineResult:
@@ -36,23 +44,25 @@ class CustomerPipelineResult:
     rejected_records: pd.DataFrame
     rejected_path: Path | None
     loaded_records: int
+    warehouse_records: int
 
 
 class CustomerPipeline:
     """Coordinate all stages of customer ETL processing."""
 
     def __init__(
-    self,
-    raw_store: RawLandingStore,
-    csv_reader: CsvReader,
-    schema_validator: DataFrameSchemaValidator,
-    record_validator: CustomerRecordValidator,
-    rejected_store: RejectedRecordStore,
-    cleaner: CustomerDataCleaner,
-    transformer: CustomerTransformer,
-    business_rules: CustomerBusinessRules,
-    staging_loader: CustomerStagingLoader,
-) -> None:
+        self,
+        raw_store: RawLandingStore,
+        csv_reader: CsvReader,
+        schema_validator: DataFrameSchemaValidator,
+        record_validator: CustomerRecordValidator,
+        rejected_store: RejectedRecordStore,
+        cleaner: CustomerDataCleaner,
+        transformer: CustomerTransformer,
+        business_rules: CustomerBusinessRules,
+        staging_loader: CustomerStagingLoader,
+        dimension_loader: CustomerDimensionLoader,
+    ) -> None:
         """Initialize the pipeline with its processing components."""
         self.raw_store = raw_store
         self.csv_reader = csv_reader
@@ -63,6 +73,7 @@ class CustomerPipeline:
         self.transformer = transformer
         self.business_rules = business_rules
         self.staging_loader = staging_loader
+        self.dimension_loader = dimension_loader
 
     def run(
         self,
@@ -70,13 +81,23 @@ class CustomerPipeline:
         batch_id: str,
     ) -> CustomerPipelineResult:
         """Execute the customer ETL pipeline."""
-        raw_path = self.raw_store.store(source_path, batch_id)
 
-        dataframe = self.csv_reader.read(raw_path)
+        raw_path = self.raw_store.store(
+            source_path,
+            batch_id,
+        )
 
-        self.schema_validator.validate(dataframe)
+        dataframe = self.csv_reader.read(
+            raw_path
+        )
 
-        validation_result = self.record_validator.validate(dataframe)
+        self.schema_validator.validate(
+            dataframe
+        )
+
+        validation_result = self.record_validator.validate(
+            dataframe
+        )
 
         rejected_path = None
 
@@ -89,7 +110,8 @@ class CustomerPipeline:
 
         if validation_result.valid_records.empty:
             raise DataValidationError(
-                "No valid customer records available for downstream processing"
+                "No valid customer records available "
+                "for downstream processing"
             )
 
         cleaned_records = self.cleaner.clean(
@@ -107,14 +129,19 @@ class CustomerPipeline:
         )
 
         loaded_records = self.staging_loader.load(
-    business_result.eligible_records
-)
+            business_result.eligible_records
+        )
+
+        warehouse_records = self.dimension_loader.load(
+            batch_id
+        )
 
         return CustomerPipelineResult(
-    raw_path=raw_path,
-    eligible_records=business_result.eligible_records,
-    excluded_records=business_result.excluded_records,
-    rejected_records=validation_result.rejected_records,
-    rejected_path=rejected_path,
-    loaded_records=loaded_records,
-)
+            raw_path=raw_path,
+            eligible_records=business_result.eligible_records,
+            excluded_records=business_result.excluded_records,
+            rejected_records=validation_result.rejected_records,
+            rejected_path=rejected_path,
+            loaded_records=loaded_records,
+            warehouse_records=warehouse_records,
+        )
