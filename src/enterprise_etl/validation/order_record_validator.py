@@ -40,10 +40,6 @@ class OrderRecordValidator:
             dtype="string",
         )
 
-        # ---------------------------------------------------------
-        # order_id validation
-        # ---------------------------------------------------------
-
         order_id_missing = self._missing_mask(
             dataframe["order_id"]
         )
@@ -81,10 +77,6 @@ class OrderRecordValidator:
             order_id_not_positive,
             "order_id must be greater than zero",
         )
-
-        # ---------------------------------------------------------
-        # customer_id validation
-        # ---------------------------------------------------------
 
         customer_id_missing = self._missing_mask(
             dataframe["customer_id"]
@@ -124,10 +116,6 @@ class OrderRecordValidator:
             "customer_id must be greater than zero",
         )
 
-        # ---------------------------------------------------------
-        # order_date validation
-        # ---------------------------------------------------------
-
         order_date_missing = self._missing_mask(
             dataframe["order_date"]
         )
@@ -154,10 +142,6 @@ class OrderRecordValidator:
             order_date_invalid,
             "order_date must be a valid YYYY-MM-DD date",
         )
-
-        # ---------------------------------------------------------
-        # order_status validation
-        # ---------------------------------------------------------
 
         order_status_missing = self._missing_mask(
             dataframe["order_status"]
@@ -188,10 +172,6 @@ class OrderRecordValidator:
             order_status_invalid,
             "order_status is not allowed",
         )
-
-        # ---------------------------------------------------------
-        # Separate valid and rejected records
-        # ---------------------------------------------------------
 
         rejected_mask = rejection_reasons.ne("")
 
