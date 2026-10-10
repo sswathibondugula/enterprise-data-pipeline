@@ -1,0 +1,5 @@
+order_item_id,order_id,product_id,quantity,unit_price
+1,1001,501,1,1299.99
+2,1001,502,2,29.99
+3,1002,503,1,89.99
+4,1003,502,1,29.99
