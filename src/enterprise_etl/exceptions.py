@@ -22,3 +22,6 @@ class DatabaseLoadError(EnterpriseETLError):
 
 class DatabaseAuditError(EnterpriseETLError):
     """Raised when pipeline audit information cannot be stored."""
+
+class DataQualityCheckError(EnterpriseETLError):
+    """Raised when warehouse data-quality checks cannot be executed."""
