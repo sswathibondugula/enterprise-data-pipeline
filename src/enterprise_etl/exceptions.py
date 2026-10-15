@@ -25,3 +25,6 @@ class DatabaseAuditError(EnterpriseETLError):
 
 class DataQualityCheckError(EnterpriseETLError):
     """Raised when warehouse data-quality checks cannot be executed."""
+
+class ProcessedSourceTrackingError(EnterpriseETLError):
+    """Raised when processed-source tracking cannot be completed."""
