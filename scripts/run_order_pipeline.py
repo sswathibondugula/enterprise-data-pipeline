@@ -22,6 +22,9 @@ from enterprise_etl.database.processed_source_repository import (
 )
 from enterprise_etl.ingestion.csv_reader import CsvReader
 from enterprise_etl.ingestion.raw_landing import RawLandingStore
+from enterprise_etl.observability.logging_config import (
+    configure_logging,
+)
 from enterprise_etl.orchestration.order_pipeline import (
     OrderPipeline,
 )
@@ -46,6 +49,10 @@ PIPELINE_NAME = "order_pipeline"
 
 def main() -> None:
     """Build, audit, and execute the order ETL pipeline."""
+
+    logger = configure_logging(
+        PROJECT_ROOT
+    )
 
     source_path = (
         PROJECT_ROOT
@@ -72,6 +79,13 @@ def main() -> None:
         "order_batch_%Y%m%d_%H%M%S"
     )
 
+    logger.info(
+        "Order pipeline starting. "
+        "Batch ID: %s | Source: %s",
+        batch_id,
+        source_path.name,
+    )
+
     database_config = (
         DatabaseConfig.from_environment()
     )
@@ -83,6 +97,10 @@ def main() -> None:
     try:
         test_database_connection(
             engine
+        )
+
+        logger.info(
+            "Database connection verified."
         )
 
         processed_source_repository = (
@@ -98,6 +116,14 @@ def main() -> None:
             )
         )
 
+        logger.info(
+            "Source fingerprint calculated. "
+            "Source: %s | Size: %s bytes | SHA-256: %s",
+            source_path.name,
+            fingerprint.source_size_bytes,
+            fingerprint.source_hash,
+        )
+
         already_processed = (
             processed_source_repository
             .is_processed(
@@ -107,19 +133,12 @@ def main() -> None:
         )
 
         if already_processed:
-            print()
-            print(
-                "Order pipeline skipped."
-            )
-            print(
-                "Reason: this exact source file "
-                "has already been processed successfully."
-            )
-            print(
-                f"Source: {source_path.name}"
-            )
-            print(
-                f"SHA-256: {fingerprint.source_hash}"
+            logger.warning(
+                "Order pipeline skipped because the exact "
+                "source content was already processed. "
+                "Source: %s | SHA-256: %s",
+                source_path.name,
+                fingerprint.source_hash,
             )
 
             return
@@ -132,6 +151,12 @@ def main() -> None:
             batch_id=batch_id,
             pipeline_name=PIPELINE_NAME,
             source_name=source_path.name,
+        )
+
+        logger.info(
+            "Pipeline audit record created. "
+            "Run ID: %s",
+            run_id,
         )
 
         pipeline = OrderPipeline(
@@ -194,47 +219,26 @@ def main() -> None:
                 batch_id=batch_id,
             )
 
-            print()
-            print(
-                "Order pipeline completed successfully."
+            logger.info(
+                "Order pipeline completed successfully. "
+                "Run ID: %s | Batch ID: %s | "
+                "Valid: %s | Rejected: %s | Loaded: %s",
+                run_id,
+                batch_id,
+                len(result.valid_records),
+                len(result.rejected_records),
+                result.loaded_records,
             )
 
-            print(
-                f"Run ID: {run_id}"
-            )
-
-            print(
-                f"Batch ID: {batch_id}"
-            )
-
-            print(
-                f"Raw file: {result.raw_path}"
-            )
-
-            print(
-                f"Valid records: "
-                f"{len(result.valid_records)}"
-            )
-
-            print(
-                f"Rejected records: "
-                f"{len(result.rejected_records)}"
-            )
-
-            print(
-                f"Loaded records: "
-                f"{result.loaded_records}"
-            )
-
-            print(
-                f"Source SHA-256: "
-                f"{fingerprint.source_hash}"
+            logger.info(
+                "Raw source archived at: %s",
+                result.raw_path,
             )
 
             if result.rejected_path is not None:
-                print(
-                    f"Rejected file: "
-                    f"{result.rejected_path}"
+                logger.warning(
+                    "Rejected records were written to: %s",
+                    result.rejected_path,
                 )
 
         except Exception as exc:
@@ -243,10 +247,32 @@ def main() -> None:
                 error_message=str(exc),
             )
 
+            logger.exception(
+                "Order pipeline failed. "
+                "Run ID: %s | Batch ID: %s",
+                run_id,
+                batch_id,
+            )
+
             raise
+
+    except Exception:
+        logger.exception(
+            "Order pipeline terminated unexpectedly. "
+            "Batch ID: %s",
+            batch_id,
+        )
+
+        raise
 
     finally:
         engine.dispose()
+
+        logger.info(
+            "Database engine disposed. "
+            "Batch ID: %s",
+            batch_id,
+        )
 
 
 if __name__ == "__main__":
