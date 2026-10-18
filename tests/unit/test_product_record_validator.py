@@ -147,3 +147,33 @@ def test_product_validator_does_not_modify_input() -> None:
         dataframe,
         original_dataframe,
     )
+
+    def test_product_validator_rejects_decimal_product_id() -> None:
+        """Product identifiers must be whole numbers."""
+
+    validator = ProductRecordValidator()
+
+    dataframe = pd.DataFrame(
+        [
+            {
+                "product_id": 501.5,
+                "product_name": "Laptop Pro",
+                "category": "Laptops",
+                "unit_price": 1299.99,
+            }
+        ]
+    )
+
+    result = validator.validate(
+        dataframe
+    )
+
+    assert result.valid_records.empty
+    assert len(result.rejected_records) == 1
+
+    assert (
+        result.rejected_records.iloc[0][
+            "rejection_reason"
+        ]
+        == "product_id must be a whole number"
+    )

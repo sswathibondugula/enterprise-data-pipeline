@@ -15,12 +15,11 @@ class OrderRecordValidator:
         self,
         allowed_statuses: tuple[str, ...],
     ) -> None:
-        """Initialize validation with supported order statuses."""
+        """Initialize the validator with allowed order statuses."""
 
         if not allowed_statuses:
             raise DataValidationError(
-                "At least one allowed order status "
-                "must be configured"
+                "At least one allowed order status is required."
             )
 
         self.allowed_statuses = {
@@ -32,13 +31,17 @@ class OrderRecordValidator:
         self,
         dataframe: pd.DataFrame,
     ) -> ValidationResult:
-        """Separate valid order records from rejected records."""
+        """Validate order records and separate valid and rejected rows."""
 
         rejection_reasons = pd.Series(
             "",
             index=dataframe.index,
-            dtype="string",
+            dtype="object",
         )
+
+        # ---------------------------------------------------------
+        # order_id validation
+        # ---------------------------------------------------------
 
         order_id_missing = self._missing_mask(
             dataframe["order_id"]
@@ -66,9 +69,28 @@ class OrderRecordValidator:
             "order_id must be numeric",
         )
 
+        # NEW:
+        # Business identifiers must represent whole numbers.
+        #
+        # Examples:
+        # 1001     -> valid
+        # 1001.0   -> valid
+        # 1001.5   -> rejected
+        order_id_not_whole = (
+            ~order_id_missing
+            & ~order_id_not_numeric
+            & (order_id_numeric % 1 != 0)
+        )
+
+        self._append_reason(
+            rejection_reasons,
+            order_id_not_whole,
+            "order_id must be a whole number",
+        )
+
         order_id_not_positive = (
             ~order_id_missing
-            & order_id_numeric.notna()
+            & ~order_id_not_numeric
             & (order_id_numeric <= 0)
         )
 
@@ -77,6 +99,10 @@ class OrderRecordValidator:
             order_id_not_positive,
             "order_id must be greater than zero",
         )
+
+        # ---------------------------------------------------------
+        # customer_id validation
+        # ---------------------------------------------------------
 
         customer_id_missing = self._missing_mask(
             dataframe["customer_id"]
@@ -104,9 +130,24 @@ class OrderRecordValidator:
             "customer_id must be numeric",
         )
 
+        # NEW:
+        # Prevent decimal customer identifiers such as 101.25
+        # from later being converted to integer 101.
+        customer_id_not_whole = (
+            ~customer_id_missing
+            & ~customer_id_not_numeric
+            & (customer_id_numeric % 1 != 0)
+        )
+
+        self._append_reason(
+            rejection_reasons,
+            customer_id_not_whole,
+            "customer_id must be a whole number",
+        )
+
         customer_id_not_positive = (
             ~customer_id_missing
-            & customer_id_numeric.notna()
+            & ~customer_id_not_numeric
             & (customer_id_numeric <= 0)
         )
 
@@ -115,6 +156,10 @@ class OrderRecordValidator:
             customer_id_not_positive,
             "customer_id must be greater than zero",
         )
+
+        # ---------------------------------------------------------
+        # order_date validation
+        # ---------------------------------------------------------
 
         order_date_missing = self._missing_mask(
             dataframe["order_date"]
@@ -126,7 +171,7 @@ class OrderRecordValidator:
             "order_date is required",
         )
 
-        parsed_dates = pd.to_datetime(
+        parsed_order_dates = pd.to_datetime(
             dataframe["order_date"],
             format="%Y-%m-%d",
             errors="coerce",
@@ -134,7 +179,7 @@ class OrderRecordValidator:
 
         order_date_invalid = (
             ~order_date_missing
-            & parsed_dates.isna()
+            & parsed_order_dates.isna()
         )
 
         self._append_reason(
@@ -142,6 +187,10 @@ class OrderRecordValidator:
             order_date_invalid,
             "order_date must be a valid YYYY-MM-DD date",
         )
+
+        # ---------------------------------------------------------
+        # order_status validation
+        # ---------------------------------------------------------
 
         order_status_missing = self._missing_mask(
             dataframe["order_status"]
@@ -160,7 +209,7 @@ class OrderRecordValidator:
             .str.upper()
         )
 
-        order_status_invalid = (
+        order_status_not_allowed = (
             ~order_status_missing
             & ~normalized_status.isin(
                 self.allowed_statuses
@@ -169,11 +218,17 @@ class OrderRecordValidator:
 
         self._append_reason(
             rejection_reasons,
-            order_status_invalid,
+            order_status_not_allowed,
             "order_status is not allowed",
         )
 
-        rejected_mask = rejection_reasons.ne("")
+        # ---------------------------------------------------------
+        # Separate valid and rejected records
+        # ---------------------------------------------------------
+
+        rejected_mask = (
+            rejection_reasons != ""
+        )
 
         valid_records = dataframe.loc[
             ~rejected_mask
@@ -183,11 +238,11 @@ class OrderRecordValidator:
             rejected_mask
         ].copy()
 
-        rejected_records["rejection_reason"] = (
-            rejection_reasons.loc[
-                rejected_mask
-            ]
-        )
+        rejected_records[
+            "rejection_reason"
+        ] = rejection_reasons.loc[
+            rejected_mask
+        ]
 
         return ValidationResult(
             valid_records=valid_records.reset_index(
@@ -202,34 +257,37 @@ class OrderRecordValidator:
     def _missing_mask(
         series: pd.Series,
     ) -> pd.Series:
-        """Identify null, empty, or whitespace-only values."""
+        """Return True for null, empty, or whitespace-only values."""
 
-        blank_mask = (
+        blank_values = (
             series.astype("string")
             .str.strip()
             .eq("")
             .fillna(False)
         )
 
-        return series.isna() | blank_mask
+        return (
+            series.isna()
+            | blank_values
+        )
 
     @staticmethod
     def _append_reason(
         rejection_reasons: pd.Series,
-        mask: pd.Series,
+        condition: pd.Series,
         message: str,
     ) -> None:
-        """Append a validation message to matching records."""
+        """Append a validation message to matching rows."""
 
-        already_has_reason = (
-            mask
+        rows_with_existing_reason = (
+            condition
             & rejection_reasons.ne("")
         )
 
         rejection_reasons.loc[
-            already_has_reason
+            rows_with_existing_reason
         ] += "; "
 
         rejection_reasons.loc[
-            mask
+            condition
         ] += message

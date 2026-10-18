@@ -14,16 +14,16 @@ class ProductRecordValidator:
         self,
         dataframe: pd.DataFrame,
     ) -> ValidationResult:
-        """Separate valid product records from rejected records."""
+        """Validate product records and separate valid and rejected rows."""
 
         rejection_reasons = pd.Series(
             "",
             index=dataframe.index,
-            dtype="string",
+            dtype="object",
         )
 
         # ---------------------------------------------------------
-        # Product ID validation
+        # product_id validation
         # ---------------------------------------------------------
 
         product_id_missing = self._missing_mask(
@@ -52,9 +52,26 @@ class ProductRecordValidator:
             "product_id must be numeric",
         )
 
+        # Product IDs must represent whole numbers.
+        #
+        # 501     -> valid
+        # 501.0   -> valid
+        # 501.5   -> rejected
+        product_id_not_whole = (
+            ~product_id_missing
+            & ~product_id_not_numeric
+            & (product_id_numeric % 1 != 0)
+        )
+
+        self._append_reason(
+            rejection_reasons,
+            product_id_not_whole,
+            "product_id must be a whole number",
+        )
+
         product_id_not_positive = (
             ~product_id_missing
-            & product_id_numeric.notna()
+            & ~product_id_not_numeric
             & (product_id_numeric <= 0)
         )
 
@@ -65,7 +82,7 @@ class ProductRecordValidator:
         )
 
         # ---------------------------------------------------------
-        # Product name validation
+        # product_name validation
         # ---------------------------------------------------------
 
         product_name_missing = self._missing_mask(
@@ -79,7 +96,7 @@ class ProductRecordValidator:
         )
 
         # ---------------------------------------------------------
-        # Category validation
+        # category validation
         # ---------------------------------------------------------
 
         category_missing = self._missing_mask(
@@ -93,7 +110,7 @@ class ProductRecordValidator:
         )
 
         # ---------------------------------------------------------
-        # Unit price validation
+        # unit_price validation
         # ---------------------------------------------------------
 
         unit_price_missing = self._missing_mask(
@@ -122,15 +139,15 @@ class ProductRecordValidator:
             "unit_price must be numeric",
         )
 
-        negative_unit_price = (
+        unit_price_negative = (
             ~unit_price_missing
-            & unit_price_numeric.notna()
+            & ~unit_price_not_numeric
             & (unit_price_numeric < 0)
         )
 
         self._append_reason(
             rejection_reasons,
-            negative_unit_price,
+            unit_price_negative,
             "unit_price cannot be negative",
         )
 
@@ -138,7 +155,9 @@ class ProductRecordValidator:
         # Separate valid and rejected records
         # ---------------------------------------------------------
 
-        rejected_mask = rejection_reasons.ne("")
+        rejected_mask = (
+            rejection_reasons != ""
+        )
 
         valid_records = dataframe.loc[
             ~rejected_mask
@@ -148,9 +167,11 @@ class ProductRecordValidator:
             rejected_mask
         ].copy()
 
-        rejected_records["rejection_reason"] = (
-            rejection_reasons.loc[rejected_mask]
-        )
+        rejected_records[
+            "rejection_reason"
+        ] = rejection_reasons.loc[
+            rejected_mask
+        ]
 
         return ValidationResult(
             valid_records=valid_records.reset_index(
@@ -165,34 +186,37 @@ class ProductRecordValidator:
     def _missing_mask(
         series: pd.Series,
     ) -> pd.Series:
-        """Identify null, empty, or whitespace-only values."""
+        """Identify null, empty, and whitespace-only values."""
 
-        blank_mask = (
+        blank_values = (
             series.astype("string")
             .str.strip()
             .eq("")
             .fillna(False)
         )
 
-        return series.isna() | blank_mask
+        return (
+            series.isna()
+            | blank_values
+        )
 
     @staticmethod
     def _append_reason(
         rejection_reasons: pd.Series,
-        mask: pd.Series,
+        condition: pd.Series,
         message: str,
     ) -> None:
         """Append a validation message to matching records."""
 
-        already_has_reason = (
-            mask
+        rows_with_existing_reason = (
+            condition
             & rejection_reasons.ne("")
         )
 
         rejection_reasons.loc[
-            already_has_reason
+            rows_with_existing_reason
         ] += "; "
 
         rejection_reasons.loc[
-            mask
+            condition
         ] += message
