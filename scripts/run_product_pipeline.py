@@ -14,6 +14,9 @@ from enterprise_etl.database.connection import (
 from enterprise_etl.database.pipeline_run_repository import (
     PipelineRunRepository,
 )
+from enterprise_etl.database.processed_source_repository import (
+    ProcessedSourceRepository,
+)
 from enterprise_etl.database.product_dimension_loader import (
     ProductDimensionLoader,
 )
@@ -40,6 +43,8 @@ from enterprise_etl.validation.schema_validator import (
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+PIPELINE_NAME = "product_pipeline"
 
 
 def main() -> None:
@@ -78,120 +83,172 @@ def main() -> None:
         database_config
     )
 
-    test_database_connection(
-        engine
-    )
-
-    run_repository = PipelineRunRepository(
-        engine
-    )
-
-    run_id = run_repository.start_run(
-        batch_id=batch_id,
-        pipeline_name="product_pipeline",
-        source_name=source_path.name,
-    )
-
-    pipeline = ProductPipeline(
-        raw_store=RawLandingStore(
-            raw_root
-        ),
-        csv_reader=CsvReader(),
-        schema_validator=DataFrameSchemaValidator(
-            required_columns=(
-                "product_id",
-                "product_name",
-                "category",
-                "unit_price",
-            )
-        ),
-        record_validator=ProductRecordValidator(),
-        rejected_store=RejectedRecordStore(
-            rejected_root
-        ),
-        cleaner=ProductDataCleaner(),
-        transformer=ProductTransformer(),
-        staging_loader=ProductStagingLoader(
-            engine
-        ),
-        dimension_loader=ProductDimensionLoader(
-            engine
-        ),
-    )
-
     try:
-        result = pipeline.run(
-            source_path=source_path,
-            batch_id=batch_id,
+        test_database_connection(
+            engine
         )
 
-        total_records = (
-            len(result.valid_records)
-            + len(result.rejected_records)
+        processed_source_repository = (
+            ProcessedSourceRepository(
+                engine
+            )
         )
 
-        run_repository.mark_success(
-            run_id=run_id,
-            total_records=total_records,
-            valid_records=len(
-                result.valid_records
-            ),
-            rejected_records=len(
-                result.rejected_records
-            ),
-            excluded_records=0,
+        fingerprint = (
+            processed_source_repository
+            .calculate_fingerprint(
+                source_path
+            )
         )
 
-        print()
-        print(
-            "Product pipeline completed successfully."
+        already_processed = (
+            processed_source_repository
+            .is_processed(
+                pipeline_name=PIPELINE_NAME,
+                source_hash=fingerprint.source_hash,
+            )
         )
 
-        print(
-            f"Run ID: {run_id}"
-        )
-
-        print(
-            f"Batch ID: {batch_id}"
-        )
-
-        print(
-            f"Raw file: {result.raw_path}"
-        )
-
-        print(
-            f"Valid records: "
-            f"{len(result.valid_records)}"
-        )
-
-        print(
-            f"Rejected records: "
-            f"{len(result.rejected_records)}"
-        )
-
-        print(
-            f"Loaded records: "
-            f"{result.loaded_records}"
-        )
-
-        print(
-            f"Warehouse records affected: "
-            f"{result.warehouse_records}"
-        )
-
-        if result.rejected_path is not None:
+        if already_processed:
+            print()
             print(
-                f"Rejected file: "
-                f"{result.rejected_path}"
+                "Product pipeline skipped."
+            )
+            print(
+                "Reason: this exact source file "
+                "has already been processed successfully."
+            )
+            print(
+                f"Source: {source_path.name}"
+            )
+            print(
+                f"SHA-256: {fingerprint.source_hash}"
             )
 
-    except Exception as exc:
-        run_repository.mark_failed(
-            run_id=run_id,
-            error_message=str(exc),
+            return
+
+        run_repository = PipelineRunRepository(
+            engine
         )
 
-        raise
+        run_id = run_repository.start_run(
+            batch_id=batch_id,
+            pipeline_name=PIPELINE_NAME,
+            source_name=source_path.name,
+        )
+
+        pipeline = ProductPipeline(
+            raw_store=RawLandingStore(
+                raw_root
+            ),
+            csv_reader=CsvReader(),
+            schema_validator=DataFrameSchemaValidator(
+                required_columns=(
+                    "product_id",
+                    "product_name",
+                    "category",
+                    "unit_price",
+                )
+            ),
+            record_validator=ProductRecordValidator(),
+            rejected_store=RejectedRecordStore(
+                rejected_root
+            ),
+            cleaner=ProductDataCleaner(),
+            transformer=ProductTransformer(),
+            staging_loader=ProductStagingLoader(
+                engine
+            ),
+            dimension_loader=ProductDimensionLoader(
+                engine
+            ),
+        )
+
+        try:
+            result = pipeline.run(
+                source_path=source_path,
+                batch_id=batch_id,
+            )
+
+            total_records = (
+                len(result.valid_records)
+                + len(result.rejected_records)
+            )
+
+            run_repository.mark_success(
+                run_id=run_id,
+                total_records=total_records,
+                valid_records=len(
+                    result.valid_records
+                ),
+                rejected_records=len(
+                    result.rejected_records
+                ),
+                excluded_records=0,
+            )
+
+            processed_source_repository.register_processed(
+                pipeline_name=PIPELINE_NAME,
+                source_name=source_path.name,
+                fingerprint=fingerprint,
+                batch_id=batch_id,
+            )
+
+            print()
+            print(
+                "Product pipeline completed successfully."
+            )
+
+            print(
+                f"Run ID: {run_id}"
+            )
+
+            print(
+                f"Batch ID: {batch_id}"
+            )
+
+            print(
+                f"Raw file: {result.raw_path}"
+            )
+
+            print(
+                f"Valid records: "
+                f"{len(result.valid_records)}"
+            )
+
+            print(
+                f"Rejected records: "
+                f"{len(result.rejected_records)}"
+            )
+
+            print(
+                f"Loaded records: "
+                f"{result.loaded_records}"
+            )
+
+            print(
+                f"Warehouse records affected: "
+                f"{result.warehouse_records}"
+            )
+
+            print(
+                f"Source SHA-256: "
+                f"{fingerprint.source_hash}"
+            )
+
+            if result.rejected_path is not None:
+                print(
+                    f"Rejected file: "
+                    f"{result.rejected_path}"
+                )
+
+        except Exception as exc:
+            run_repository.mark_failed(
+                run_id=run_id,
+                error_message=str(exc),
+            )
+
+            raise
 
     finally:
         engine.dispose()

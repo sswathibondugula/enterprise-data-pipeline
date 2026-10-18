@@ -23,6 +23,9 @@ from enterprise_etl.database.customer_staging_loader import (
 from enterprise_etl.database.pipeline_run_repository import (
     PipelineRunRepository,
 )
+from enterprise_etl.database.processed_source_repository import (
+    ProcessedSourceRepository,
+)
 from enterprise_etl.ingestion.csv_reader import CsvReader
 from enterprise_etl.ingestion.raw_landing import RawLandingStore
 from enterprise_etl.orchestration.customer_pipeline import (
@@ -43,6 +46,8 @@ from enterprise_etl.validation.schema_validator import (
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+PIPELINE_NAME = "customer_pipeline"
 
 
 def main() -> None:
@@ -67,145 +72,201 @@ def main() -> None:
         / "rejected"
     )
 
-    batch_id = datetime.now(timezone.utc).strftime(
-        "batch_%Y%m%d_%H%M%S"
+    batch_id = datetime.now(
+        timezone.utc
+    ).strftime(
+        "customer_batch_%Y%m%d_%H%M%S"
     )
 
-    database_config = DatabaseConfig.from_environment()
+    database_config = (
+        DatabaseConfig.from_environment()
+    )
 
     engine = create_database_engine(
         database_config
     )
 
-    test_database_connection(
-        engine
-    )
-
-    run_repository = PipelineRunRepository(
-        engine
-    )
-
-    run_id = run_repository.start_run(
-        batch_id=batch_id,
-        pipeline_name="customer_pipeline",
-        source_name=source_path.name,
-    )
-
-    pipeline = CustomerPipeline(
-        raw_store=RawLandingStore(
-            raw_root
-        ),
-        csv_reader=CsvReader(),
-        schema_validator=DataFrameSchemaValidator(
-            required_columns=(
-                "customer_id",
-                "name",
-                "country",
-            )
-        ),
-        record_validator=CustomerRecordValidator(),
-        rejected_store=RejectedRecordStore(
-            rejected_root
-        ),
-        cleaner=CustomerDataCleaner(),
-        transformer=CustomerTransformer(),
-        business_rules=CustomerBusinessRules(
-            allowed_countries=(
-                "Canada",
-                "India",
-            )
-        ),
-        staging_loader=CustomerStagingLoader(
-            engine
-        ),
-        dimension_loader=CustomerDimensionLoader(
-            engine
-        ),
-    )
-
     try:
-        result = pipeline.run(
-            source_path=source_path,
-            batch_id=batch_id,
+        test_database_connection(
+            engine
         )
 
-        valid_records = (
-            len(result.eligible_records)
-            + len(result.excluded_records)
+        processed_source_repository = (
+            ProcessedSourceRepository(
+                engine
+            )
         )
 
-        total_records = (
-            valid_records
-            + len(result.rejected_records)
+        fingerprint = (
+            processed_source_repository
+            .calculate_fingerprint(
+                source_path
+            )
         )
 
-        run_repository.mark_success(
-            run_id=run_id,
-            total_records=total_records,
-            valid_records=valid_records,
-            rejected_records=len(
-                result.rejected_records
-            ),
-            excluded_records=len(
-                result.excluded_records
-            ),
+        already_processed = (
+            processed_source_repository
+            .is_processed(
+                pipeline_name=PIPELINE_NAME,
+                source_hash=fingerprint.source_hash,
+            )
         )
 
-        print()
-        print(
-            "Customer pipeline completed successfully."
-        )
-
-        print(
-            f"Run ID: {run_id}"
-        )
-
-        print(
-            f"Batch ID: {batch_id}"
-        )
-
-        print(
-            f"Raw file: {result.raw_path}"
-        )
-
-        print(
-            f"Eligible records: "
-            f"{len(result.eligible_records)}"
-        )
-
-        print(
-            f"Rejected records: "
-            f"{len(result.rejected_records)}"
-        )
-
-        print(
-            f"Excluded records: "
-            f"{len(result.excluded_records)}"
-        )
-
-        print(
-            f"Loaded records: "
-            f"{result.loaded_records}"
-        )
-
-        print(
-            f"Warehouse records affected: "
-            f"{result.warehouse_records}"
-        )
-
-        if result.rejected_path is not None:
+        if already_processed:
+            print()
             print(
-                f"Rejected file: "
-                f"{result.rejected_path}"
+                "Customer pipeline skipped."
+            )
+            print(
+                "Reason: this exact source file "
+                "has already been processed successfully."
+            )
+            print(
+                f"Source: {source_path.name}"
+            )
+            print(
+                f"SHA-256: {fingerprint.source_hash}"
             )
 
-    except Exception as exc:
-        run_repository.mark_failed(
-            run_id=run_id,
-            error_message=str(exc),
+            return
+
+        run_repository = PipelineRunRepository(
+            engine
         )
 
-        raise
+        run_id = run_repository.start_run(
+            batch_id=batch_id,
+            pipeline_name=PIPELINE_NAME,
+            source_name=source_path.name,
+        )
+
+        pipeline = CustomerPipeline(
+            raw_store=RawLandingStore(
+                raw_root
+            ),
+            csv_reader=CsvReader(),
+            schema_validator=DataFrameSchemaValidator(
+                required_columns=(
+                    "customer_id",
+                    "name",
+                    "country",
+                )
+            ),
+            record_validator=CustomerRecordValidator(),
+            rejected_store=RejectedRecordStore(
+                rejected_root
+            ),
+            cleaner=CustomerDataCleaner(),
+            transformer=CustomerTransformer(),
+            business_rules=CustomerBusinessRules(
+                allowed_countries=(
+                    "Canada",
+                    "India",
+                )
+            ),
+            staging_loader=CustomerStagingLoader(
+                engine
+            ),
+            dimension_loader=CustomerDimensionLoader(
+                engine
+            ),
+        )
+
+        try:
+            result = pipeline.run(
+                source_path=source_path,
+                batch_id=batch_id,
+            )
+
+            valid_records = (
+                len(result.eligible_records)
+                + len(result.excluded_records)
+            )
+
+            total_records = (
+                valid_records
+                + len(result.rejected_records)
+            )
+
+            run_repository.mark_success(
+                run_id=run_id,
+                total_records=total_records,
+                valid_records=valid_records,
+                rejected_records=len(
+                    result.rejected_records
+                ),
+                excluded_records=len(
+                    result.excluded_records
+                ),
+            )
+
+            processed_source_repository.register_processed(
+                pipeline_name=PIPELINE_NAME,
+                source_name=source_path.name,
+                fingerprint=fingerprint,
+                batch_id=batch_id,
+            )
+
+            print()
+            print(
+                "Customer pipeline completed successfully."
+            )
+
+            print(
+                f"Run ID: {run_id}"
+            )
+
+            print(
+                f"Batch ID: {batch_id}"
+            )
+
+            print(
+                f"Raw file: {result.raw_path}"
+            )
+
+            print(
+                f"Eligible records: "
+                f"{len(result.eligible_records)}"
+            )
+
+            print(
+                f"Rejected records: "
+                f"{len(result.rejected_records)}"
+            )
+
+            print(
+                f"Excluded records: "
+                f"{len(result.excluded_records)}"
+            )
+
+            print(
+                f"Loaded records: "
+                f"{result.loaded_records}"
+            )
+
+            print(
+                f"Warehouse records affected: "
+                f"{result.warehouse_records}"
+            )
+
+            print(
+                f"Source SHA-256: "
+                f"{fingerprint.source_hash}"
+            )
+
+            if result.rejected_path is not None:
+                print(
+                    f"Rejected file: "
+                    f"{result.rejected_path}"
+                )
+
+        except Exception as exc:
+            run_repository.mark_failed(
+                run_id=run_id,
+                error_message=str(exc),
+            )
+
+            raise
 
     finally:
         engine.dispose()
