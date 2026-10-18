@@ -5,57 +5,183 @@ from dataclasses import dataclass
 import pandas as pd
 
 
-@dataclass
+@dataclass(frozen=True)
 class ValidationResult:
-    """Store valid and rejected records produced by validation."""
+    """Result of record-level validation."""
 
     valid_records: pd.DataFrame
     rejected_records: pd.DataFrame
 
 
 class CustomerRecordValidator:
-    """Validate required values in customer records."""
+    """Validate individual customer records."""
 
-    REQUIRED_FIELDS = ("customer_id", "name", "country")
+    def validate(
+        self,
+        dataframe: pd.DataFrame,
+    ) -> ValidationResult:
+        """Validate customers and separate valid and rejected rows."""
 
-    def validate(self, dataframe: pd.DataFrame) -> ValidationResult:
-        """Separate valid customer records from rejected records."""
         rejection_reasons = pd.Series(
             "",
             index=dataframe.index,
-            dtype="string",
+            dtype="object",
         )
 
-        for column in self.REQUIRED_FIELDS:
-            missing_mask = self._missing_mask(dataframe[column])
-            message = f"{column} is required"
+        # ---------------------------------------------------------
+        # customer_id validation
+        # ---------------------------------------------------------
 
-            has_existing_reason = missing_mask & rejection_reasons.ne("")
-            rejection_reasons.loc[has_existing_reason] += "; "
-            rejection_reasons.loc[missing_mask] += message
+        customer_id_missing = self._missing_mask(
+            dataframe["customer_id"]
+        )
 
-        rejected_mask = rejection_reasons.ne("")
+        self._append_reason(
+            rejection_reasons,
+            customer_id_missing,
+            "customer_id is required",
+        )
 
-        valid_records = dataframe.loc[~rejected_mask].copy()
-        rejected_records = dataframe.loc[rejected_mask].copy()
+        customer_id_numeric = pd.to_numeric(
+            dataframe["customer_id"],
+            errors="coerce",
+        )
 
-        rejected_records["rejection_reason"] = rejection_reasons.loc[
+        customer_id_not_numeric = (
+            ~customer_id_missing
+            & customer_id_numeric.isna()
+        )
+
+        self._append_reason(
+            rejection_reasons,
+            customer_id_not_numeric,
+            "customer_id must be numeric",
+        )
+
+        # NEW:
+        # Customer IDs must represent whole numbers.
+        #
+        # 101     -> valid
+        # 101.0   -> valid
+        # 101.5   -> rejected
+        customer_id_not_whole = (
+            ~customer_id_missing
+            & ~customer_id_not_numeric
+            & (customer_id_numeric % 1 != 0)
+        )
+
+        self._append_reason(
+            rejection_reasons,
+            customer_id_not_whole,
+            "customer_id must be a whole number",
+        )
+
+        customer_id_not_positive = (
+            ~customer_id_missing
+            & ~customer_id_not_numeric
+            & (customer_id_numeric <= 0)
+        )
+
+        self._append_reason(
+            rejection_reasons,
+            customer_id_not_positive,
+            "customer_id must be greater than zero",
+        )
+
+        # ---------------------------------------------------------
+        # name validation
+        # ---------------------------------------------------------
+
+        name_missing = self._missing_mask(
+            dataframe["name"]
+        )
+
+        self._append_reason(
+            rejection_reasons,
+            name_missing,
+            "name is required",
+        )
+
+        # ---------------------------------------------------------
+        # country validation
+        # ---------------------------------------------------------
+
+        country_missing = self._missing_mask(
+            dataframe["country"]
+        )
+
+        self._append_reason(
+            rejection_reasons,
+            country_missing,
+            "country is required",
+        )
+
+        # ---------------------------------------------------------
+        # Separate valid and rejected records
+        # ---------------------------------------------------------
+
+        rejected_mask = (
+            rejection_reasons != ""
+        )
+
+        valid_records = dataframe.loc[
+            ~rejected_mask
+        ].copy()
+
+        rejected_records = dataframe.loc[
+            rejected_mask
+        ].copy()
+
+        rejected_records[
+            "rejection_reason"
+        ] = rejection_reasons.loc[
             rejected_mask
         ]
 
         return ValidationResult(
-            valid_records=valid_records.reset_index(drop=True),
-            rejected_records=rejected_records.reset_index(drop=True),
+            valid_records=valid_records.reset_index(
+                drop=True
+            ),
+            rejected_records=rejected_records.reset_index(
+                drop=True
+            ),
         )
 
     @staticmethod
-    def _missing_mask(series: pd.Series) -> pd.Series:
-        """Identify null, empty, or whitespace-only values."""
-        blank_mask = (
+    def _missing_mask(
+        series: pd.Series,
+    ) -> pd.Series:
+        """Identify null, empty, and whitespace-only values."""
+
+        blank_values = (
             series.astype("string")
             .str.strip()
             .eq("")
             .fillna(False)
         )
 
-        return series.isna() | blank_mask
+        return (
+            series.isna()
+            | blank_values
+        )
+
+    @staticmethod
+    def _append_reason(
+        rejection_reasons: pd.Series,
+        condition: pd.Series,
+        message: str,
+    ) -> None:
+        """Append a validation message to matching records."""
+
+        rows_with_existing_reason = (
+            condition
+            & rejection_reasons.ne("")
+        )
+
+        rejection_reasons.loc[
+            rows_with_existing_reason
+        ] += "; "
+
+        rejection_reasons.loc[
+            condition
+        ] += message

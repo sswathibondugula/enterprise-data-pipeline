@@ -110,3 +110,32 @@ def test_record_validation_does_not_modify_original_dataframe() -> None:
     validator.validate(dataframe)
 
     pd.testing.assert_frame_equal(dataframe, original_dataframe)
+
+def test_customer_validator_rejects_decimal_customer_id() -> None:
+    """Customer identifiers must be whole numbers."""
+
+    validator = CustomerRecordValidator()
+
+    dataframe = pd.DataFrame(
+        [
+            {
+                "customer_id": 101.5,
+                "name": "Alice",
+                "country": "India",
+            }
+        ]
+    )
+
+    result = validator.validate(
+        dataframe
+    )
+
+    assert result.valid_records.empty
+    assert len(result.rejected_records) == 1
+
+    assert (
+        result.rejected_records.iloc[0][
+            "rejection_reason"
+        ]
+        == "customer_id must be a whole number"
+    )
