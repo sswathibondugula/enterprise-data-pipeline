@@ -25,3 +25,7 @@ dist/
 # Operating-system files
 .DS_Store
 Thumbs.db
+
+# Application runtime logs
+logs/
+*.log
