@@ -28,3 +28,6 @@ class DataQualityCheckError(EnterpriseETLError):
 
 class ProcessedSourceTrackingError(EnterpriseETLError):
     """Raised when processed-source tracking cannot be completed."""
+
+class WatermarkTrackingError(EnterpriseETLError):
+    """Raised when incremental watermark tracking fails."""
