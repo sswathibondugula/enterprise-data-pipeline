@@ -29,3 +29,7 @@ Thumbs.db
 # Application runtime logs
 logs/
 *.log
+
+# ETL runtime-generated data
+data/raw/
+data/rejected/
