@@ -40,7 +40,7 @@ class OrderRecordValidator:
         )
 
         # ---------------------------------------------------------
-        # order_id validation
+        # order_id
         # ---------------------------------------------------------
 
         order_id_missing = self._missing_mask(
@@ -69,13 +69,6 @@ class OrderRecordValidator:
             "order_id must be numeric",
         )
 
-        # NEW:
-        # Business identifiers must represent whole numbers.
-        #
-        # Examples:
-        # 1001     -> valid
-        # 1001.0   -> valid
-        # 1001.5   -> rejected
         order_id_not_whole = (
             ~order_id_missing
             & ~order_id_not_numeric
@@ -101,7 +94,7 @@ class OrderRecordValidator:
         )
 
         # ---------------------------------------------------------
-        # customer_id validation
+        # customer_id
         # ---------------------------------------------------------
 
         customer_id_missing = self._missing_mask(
@@ -130,9 +123,6 @@ class OrderRecordValidator:
             "customer_id must be numeric",
         )
 
-        # NEW:
-        # Prevent decimal customer identifiers such as 101.25
-        # from later being converted to integer 101.
         customer_id_not_whole = (
             ~customer_id_missing
             & ~customer_id_not_numeric
@@ -158,7 +148,7 @@ class OrderRecordValidator:
         )
 
         # ---------------------------------------------------------
-        # order_date validation
+        # order_date
         # ---------------------------------------------------------
 
         order_date_missing = self._missing_mask(
@@ -171,7 +161,7 @@ class OrderRecordValidator:
             "order_date is required",
         )
 
-        parsed_order_dates = pd.to_datetime(
+        parsed_order_date = pd.to_datetime(
             dataframe["order_date"],
             format="%Y-%m-%d",
             errors="coerce",
@@ -179,7 +169,7 @@ class OrderRecordValidator:
 
         order_date_invalid = (
             ~order_date_missing
-            & parsed_order_dates.isna()
+            & parsed_order_date.isna()
         )
 
         self._append_reason(
@@ -189,7 +179,7 @@ class OrderRecordValidator:
         )
 
         # ---------------------------------------------------------
-        # order_status validation
+        # order_status
         # ---------------------------------------------------------
 
         order_status_missing = self._missing_mask(
@@ -209,7 +199,7 @@ class OrderRecordValidator:
             .str.upper()
         )
 
-        order_status_not_allowed = (
+        order_status_invalid = (
             ~order_status_missing
             & ~normalized_status.isin(
                 self.allowed_statuses
@@ -218,12 +208,50 @@ class OrderRecordValidator:
 
         self._append_reason(
             rejection_reasons,
-            order_status_not_allowed,
+            order_status_invalid,
             "order_status is not allowed",
         )
 
         # ---------------------------------------------------------
-        # Separate valid and rejected records
+        # source_updated_at
+        # ---------------------------------------------------------
+        #
+        # The structural schema validator will make this column
+        # mandatory in the real pipeline.
+        #
+        # This conditional keeps older direct unit tests compatible
+        # while still validating every supplied timestamp.
+
+        if "source_updated_at" in dataframe.columns:
+            source_updated_at_missing = self._missing_mask(
+                dataframe["source_updated_at"]
+            )
+
+            self._append_reason(
+                rejection_reasons,
+                source_updated_at_missing,
+                "source_updated_at is required",
+            )
+
+            parsed_source_updated_at = pd.to_datetime(
+                dataframe["source_updated_at"],
+                errors="coerce",
+                utc=True,
+            )
+
+            source_updated_at_invalid = (
+                ~source_updated_at_missing
+                & parsed_source_updated_at.isna()
+            )
+
+            self._append_reason(
+                rejection_reasons,
+                source_updated_at_invalid,
+                "source_updated_at must be a valid timestamp",
+            )
+
+        # ---------------------------------------------------------
+        # Build validation result
         # ---------------------------------------------------------
 
         rejected_mask = (
@@ -257,7 +285,7 @@ class OrderRecordValidator:
     def _missing_mask(
         series: pd.Series,
     ) -> pd.Series:
-        """Return True for null, empty, or whitespace-only values."""
+        """Identify null, empty, and whitespace-only values."""
 
         blank_values = (
             series.astype("string")
@@ -277,7 +305,7 @@ class OrderRecordValidator:
         condition: pd.Series,
         message: str,
     ) -> None:
-        """Append a validation message to matching rows."""
+        """Append a validation message to matching records."""
 
         rows_with_existing_reason = (
             condition

@@ -19,6 +19,7 @@ INSERT_ORDERS_SQL = text(
         customer_id,
         order_date,
         order_status,
+        source_updated_at,
         batch_id,
         source_name,
         processed_at
@@ -28,6 +29,7 @@ INSERT_ORDERS_SQL = text(
         :customer_id,
         :order_date,
         :order_status,
+        :source_updated_at,
         :batch_id,
         :source_name,
         :processed_at
@@ -44,6 +46,7 @@ class OrderStagingLoader:
         "customer_id",
         "order_date",
         "order_status",
+        "source_updated_at",
         "batch_id",
         "source_name",
         "processed_at",
@@ -61,7 +64,7 @@ class OrderStagingLoader:
         self,
         dataframe: pd.DataFrame,
     ) -> int:
-        """Load order records and return the number inserted."""
+        """Load order records and return the number of inserted rows."""
 
         if dataframe.empty:
             return 0
@@ -95,9 +98,43 @@ class OrderStagingLoader:
             .astype("int64")
         )
 
+        records_to_load[
+            "source_updated_at"
+        ] = pd.to_datetime(
+            records_to_load[
+                "source_updated_at"
+            ],
+            utc=True,
+        )
+
         records = records_to_load.to_dict(
             orient="records"
         )
+
+        for record in records:
+            source_updated_at = record[
+                "source_updated_at"
+            ]
+
+            if hasattr(
+                source_updated_at,
+                "to_pydatetime",
+            ):
+                record[
+                    "source_updated_at"
+                ] = source_updated_at.to_pydatetime()
+
+            processed_at = record[
+                "processed_at"
+            ]
+
+            if hasattr(
+                processed_at,
+                "to_pydatetime",
+            ):
+                record[
+                    "processed_at"
+                ] = processed_at.to_pydatetime()
 
         try:
             with self.engine.begin() as connection:
@@ -108,8 +145,7 @@ class OrderStagingLoader:
 
         except SQLAlchemyError as exc:
             raise DatabaseLoadError(
-                "Unable to load order records into "
-                "staging.stg_orders"
+                "Unable to load order records into staging.stg_orders"
             ) from exc
 
         return len(records)

@@ -146,3 +146,68 @@ def test_order_cleaner_does_not_modify_input() -> None:
         dataframe,
         original_dataframe,
     )
+
+def test_order_cleaner_converts_source_updated_at_to_utc() -> None:
+    """Source update timestamps become timezone-aware UTC values."""
+
+    cleaner = OrderDataCleaner()
+
+    dataframe = pd.DataFrame(
+        [
+            {
+                "order_id": "1001",
+                "customer_id": "101",
+                "order_date": "2026-10-01",
+                "order_status": " completed ",
+                "source_updated_at": "2026-10-18T10:15:00Z",
+            }
+        ]
+    )
+
+    result = cleaner.clean(
+        dataframe
+    )
+
+    assert str(
+        result["source_updated_at"].dt.tz
+    ) == "UTC"
+
+    assert (
+        result.iloc[0]["source_updated_at"]
+        == pd.Timestamp(
+            "2026-10-18T10:15:00Z"
+        )
+    )
+
+
+def test_order_cleaner_preserves_other_order_cleaning() -> None:
+    """Adding source timestamps does not change existing cleaning rules."""
+
+    cleaner = OrderDataCleaner()
+
+    dataframe = pd.DataFrame(
+        [
+            {
+                "order_id": "1001",
+                "customer_id": "101",
+                "order_date": "2026-10-01",
+                "order_status": " completed ",
+                "source_updated_at": "2026-10-18T10:15:00Z",
+            }
+        ]
+    )
+
+    result = cleaner.clean(
+        dataframe
+    )
+
+    assert result.iloc[0]["order_id"] == 1001
+    assert result.iloc[0]["customer_id"] == 101
+    assert str(
+        result.iloc[0]["order_date"]
+    ) == "2026-10-01"
+
+    assert (
+        result.iloc[0]["order_status"]
+        == "COMPLETED"
+    )

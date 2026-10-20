@@ -20,8 +20,12 @@ from enterprise_etl.database.pipeline_run_repository import (
 from enterprise_etl.database.processed_source_repository import (
     ProcessedSourceRepository,
 )
-from enterprise_etl.ingestion.csv_reader import CsvReader
-from enterprise_etl.ingestion.raw_landing import RawLandingStore
+from enterprise_etl.ingestion.csv_reader import (
+    CsvReader,
+)
+from enterprise_etl.ingestion.raw_landing import (
+    RawLandingStore,
+)
 from enterprise_etl.observability.logging_config import (
     configure_logging,
 )
@@ -103,6 +107,10 @@ def main() -> None:
             "Database connection verified."
         )
 
+        # ---------------------------------------------------------
+        # Source idempotency
+        # ---------------------------------------------------------
+
         processed_source_repository = (
             ProcessedSourceRepository(
                 engine
@@ -143,6 +151,10 @@ def main() -> None:
 
             return
 
+        # ---------------------------------------------------------
+        # Pipeline audit
+        # ---------------------------------------------------------
+
         run_repository = PipelineRunRepository(
             engine
         )
@@ -159,6 +171,10 @@ def main() -> None:
             run_id,
         )
 
+        # ---------------------------------------------------------
+        # Build the Order pipeline
+        # ---------------------------------------------------------
+
         pipeline = OrderPipeline(
             raw_store=RawLandingStore(
                 raw_root
@@ -170,6 +186,7 @@ def main() -> None:
                     "customer_id",
                     "order_date",
                     "order_status",
+                    "source_updated_at",
                 )
             ),
             record_validator=OrderRecordValidator(
@@ -189,6 +206,10 @@ def main() -> None:
             ),
         )
 
+        # ---------------------------------------------------------
+        # Execute pipeline
+        # ---------------------------------------------------------
+
         try:
             result = pipeline.run(
                 source_path=source_path,
@@ -199,6 +220,10 @@ def main() -> None:
                 len(result.valid_records)
                 + len(result.rejected_records)
             )
+
+            # -----------------------------------------------------
+            # Mark audit success
+            # -----------------------------------------------------
 
             run_repository.mark_success(
                 run_id=run_id,
@@ -211,6 +236,10 @@ def main() -> None:
                 ),
                 excluded_records=0,
             )
+
+            # -----------------------------------------------------
+            # Register successful source
+            # -----------------------------------------------------
 
             processed_source_repository.register_processed(
                 pipeline_name=PIPELINE_NAME,
@@ -237,7 +266,7 @@ def main() -> None:
 
             if result.rejected_path is not None:
                 logger.warning(
-                    "Rejected records were written to: %s",
+                    "Rejected order records were written to: %s",
                     result.rejected_path,
                 )
 

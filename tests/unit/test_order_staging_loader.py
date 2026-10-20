@@ -1,148 +1,232 @@
-"""Unit tests for order staging database loading."""
+"""Unit tests for the order staging loader."""
 
-from datetime import date
+from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 import pandas as pd
 import pytest
+from sqlalchemy.exc import SQLAlchemyError
 
 from enterprise_etl.database.order_staging_loader import (
     OrderStagingLoader,
 )
-from enterprise_etl.exceptions import DataValidationError
+from enterprise_etl.exceptions import (
+    DatabaseLoadError,
+    DataValidationError,
+)
 
 
-def test_order_staging_loader_returns_zero_for_empty_dataframe() -> None:
-    """Empty order datasets do not trigger a database operation."""
+def create_order_dataframe() -> pd.DataFrame:
+    """Create a valid transformed order DataFrame for loader tests."""
 
-    engine = MagicMock()
-
-    loader = OrderStagingLoader(
-        engine
-    )
-
-    loaded_count = loader.load(
-        pd.DataFrame()
-    )
-
-    assert loaded_count == 0
-
-    engine.begin.assert_not_called()
-
-
-def test_order_staging_loader_rejects_missing_columns() -> None:
-    """Order staging requires all expected columns."""
-
-    dataframe = pd.DataFrame(
+    return pd.DataFrame(
         [
             {
                 "order_id": 1001,
                 "customer_id": 101,
-                "order_date": date(
+                "order_date": datetime(
                     2026,
                     10,
                     1,
-                ),
+                ).date(),
                 "order_status": "COMPLETED",
+                "source_updated_at": pd.Timestamp(
+                    "2026-10-18T10:15:00Z"
+                ),
+                "batch_id": "order_batch_test",
+                "source_name": "orders.csv",
+                "processed_at": datetime(
+                    2026,
+                    10,
+                    20,
+                    7,
+                    0,
+                    tzinfo=timezone.utc,
+                ),
             }
         ]
-    )
-
-    loader = OrderStagingLoader(
-        MagicMock()
-    )
-
-    with pytest.raises(
-        DataValidationError
-    ) as error:
-        loader.load(
-            dataframe
-        )
-
-    assert (
-        "Order staging columns are missing:"
-        in str(error.value)
     )
 
 
 def test_order_staging_loader_inserts_order_records() -> None:
-    """Transformed orders are sent to PostgreSQL staging."""
-
-    dataframe = pd.DataFrame(
-        [
-            {
-                "order_id": 1001,
-                "customer_id": 101,
-                "order_date": date(
-                    2026,
-                    10,
-                    1,
-                ),
-                "order_status": "COMPLETED",
-                "batch_id": "order_batch_001",
-                "source_name": "orders.csv",
-                "processed_at": pd.Timestamp(
-                    "2026-10-06T12:00:00Z"
-                ),
-            }
-        ]
-    )
+    """Valid order records are inserted into staging."""
 
     engine = MagicMock()
+    connection = MagicMock()
 
-    connection = (
-        engine.begin.return_value
-        .__enter__.return_value
+    engine.begin.return_value.__enter__.return_value = (
+        connection
     )
+
+    dataframe = create_order_dataframe()
 
     loader = OrderStagingLoader(
         engine
     )
 
-    loaded_count = loader.load(
+    loaded_records = loader.load(
         dataframe
     )
 
-    assert loaded_count == 1
-
-    engine.begin.assert_called_once()
+    assert loaded_records == 1
 
     connection.execute.assert_called_once()
 
-    parameters = (
-        connection.execute.call_args.args[1]
+    _, records = (
+        connection.execute.call_args.args
     )
 
-    assert (
-        parameters[0]["order_id"]
-        == 1001
-    )
+    assert len(records) == 1
+
+    record = records[0]
+
+    assert record["order_id"] == 1001
+    assert record["customer_id"] == 101
 
     assert (
-        parameters[0]["customer_id"]
-        == 101
-    )
-
-    assert (
-        parameters[0]["order_date"]
-        == date(
-            2026,
-            10,
-            1,
-        )
-    )
-
-    assert (
-        parameters[0]["order_status"]
+        record["order_status"]
         == "COMPLETED"
     )
 
     assert (
-        parameters[0]["batch_id"]
-        == "order_batch_001"
+        record["batch_id"]
+        == "order_batch_test"
     )
 
     assert (
-        parameters[0]["source_name"]
+        record["source_name"]
         == "orders.csv"
     )
+
+
+def test_order_staging_loader_includes_source_updated_at() -> None:
+    """Source update timestamp is passed to PostgreSQL."""
+
+    engine = MagicMock()
+    connection = MagicMock()
+
+    engine.begin.return_value.__enter__.return_value = (
+        connection
+    )
+
+    dataframe = create_order_dataframe()
+
+    loader = OrderStagingLoader(
+        engine
+    )
+
+    loaded_records = loader.load(
+        dataframe
+    )
+
+    assert loaded_records == 1
+
+    connection.execute.assert_called_once()
+
+    _, records = (
+        connection.execute.call_args.args
+    )
+
+    source_updated_at = records[0][
+        "source_updated_at"
+    ]
+
+    assert isinstance(
+        source_updated_at,
+        datetime,
+    )
+
+    assert (
+        source_updated_at
+        == pd.Timestamp(
+            "2026-10-18T10:15:00Z"
+        ).to_pydatetime()
+    )
+
+    assert (
+        source_updated_at.tzinfo
+        is not None
+    )
+
+
+def test_order_staging_loader_returns_zero_for_empty_dataframe() -> None:
+    """An empty DataFrame causes no database insert."""
+
+    engine = MagicMock()
+
+    loader = OrderStagingLoader(
+        engine
+    )
+
+    dataframe = pd.DataFrame()
+
+    loaded_records = loader.load(
+        dataframe
+    )
+
+    assert loaded_records == 0
+
+    engine.begin.assert_not_called()
+
+
+def test_order_staging_loader_rejects_missing_required_columns() -> None:
+    """Loader rejects transformed data with missing columns."""
+
+    engine = MagicMock()
+
+    loader = OrderStagingLoader(
+        engine
+    )
+
+    dataframe = create_order_dataframe().drop(
+        columns=[
+            "source_updated_at",
+        ]
+    )
+
+    with pytest.raises(
+        DataValidationError,
+        match=(
+            "Order staging columns are missing: "
+            "source_updated_at"
+        ),
+    ):
+        loader.load(
+            dataframe
+        )
+
+    engine.begin.assert_not_called()
+
+
+def test_order_staging_loader_wraps_database_errors() -> None:
+    """SQLAlchemy failures become application DatabaseLoadError."""
+
+    engine = MagicMock()
+    connection = MagicMock()
+
+    engine.begin.return_value.__enter__.return_value = (
+        connection
+    )
+
+    connection.execute.side_effect = (
+        SQLAlchemyError(
+            "Database failure"
+        )
+    )
+
+    dataframe = create_order_dataframe()
+
+    loader = OrderStagingLoader(
+        engine
+    )
+
+    with pytest.raises(
+        DatabaseLoadError,
+        match=(
+            "Unable to load order records "
+            "into staging.stg_orders"
+        ),
+    ):
+        loader.load(
+            dataframe
+        )
