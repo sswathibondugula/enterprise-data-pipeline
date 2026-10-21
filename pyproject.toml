@@ -7,7 +7,7 @@ name = "enterprise-data-pipeline"
 version = "0.1.0"
 description = "A production-style enterprise data pipeline and ETL automation system."
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.12"
 dependencies = [
     "pandas>=2.2",
     "sqlalchemy>=2.0",
