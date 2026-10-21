@@ -1,4 +1,4 @@
-"""Run the order ETL pipeline against local PostgreSQL."""
+"""Run the incremental Order ETL pipeline against PostgreSQL."""
 
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,6 +20,9 @@ from enterprise_etl.database.pipeline_run_repository import (
 from enterprise_etl.database.processed_source_repository import (
     ProcessedSourceRepository,
 )
+from enterprise_etl.database.watermark_repository import (
+    WatermarkRepository,
+)
 from enterprise_etl.ingestion.csv_reader import (
     CsvReader,
 )
@@ -31,6 +34,9 @@ from enterprise_etl.observability.logging_config import (
 )
 from enterprise_etl.orchestration.order_pipeline import (
     OrderPipeline,
+)
+from enterprise_etl.transformation.order_incremental_filter import (
+    OrderIncrementalFilter,
 )
 from enterprise_etl.transformation.order_transformer import (
     OrderTransformer,
@@ -50,9 +56,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 PIPELINE_NAME = "order_pipeline"
 
+WATERMARK_NAME = "source_updated_at"
+
 
 def main() -> None:
-    """Build, audit, and execute the order ETL pipeline."""
+    """Execute the incremental Order ETL pipeline."""
 
     logger = configure_logging(
         PROJECT_ROOT
@@ -99,6 +107,10 @@ def main() -> None:
     )
 
     try:
+        # ---------------------------------------------------------
+        # 1. Verify PostgreSQL connection
+        # ---------------------------------------------------------
+
         test_database_connection(
             engine
         )
@@ -108,14 +120,28 @@ def main() -> None:
         )
 
         # ---------------------------------------------------------
-        # Source idempotency
+        # 2. Build repositories
         # ---------------------------------------------------------
+
+        run_repository = PipelineRunRepository(
+            engine
+        )
 
         processed_source_repository = (
             ProcessedSourceRepository(
                 engine
             )
         )
+
+        watermark_repository = (
+            WatermarkRepository(
+                engine
+            )
+        )
+
+        # ---------------------------------------------------------
+        # 3. Calculate source fingerprint
+        # ---------------------------------------------------------
 
         fingerprint = (
             processed_source_repository
@@ -132,6 +158,44 @@ def main() -> None:
             fingerprint.source_hash,
         )
 
+        # ---------------------------------------------------------
+        # 4. Read previous successful watermark
+        # ---------------------------------------------------------
+
+        previous_watermark = (
+            watermark_repository
+            .get_watermark(
+                pipeline_name=PIPELINE_NAME,
+                watermark_name=WATERMARK_NAME,
+            )
+        )
+
+        if previous_watermark is None:
+            logger.info(
+                "No previous Order watermark found. "
+                "This will be treated as the first "
+                "incremental run."
+            )
+
+        else:
+            logger.info(
+                "Previous Order watermark: %s",
+                previous_watermark,
+            )
+
+        # ---------------------------------------------------------
+        # 5. Check whole-file idempotency
+        # ---------------------------------------------------------
+        #
+        # File hashing remains useful as an optimization.
+        #
+        # IMPORTANT:
+        # We only use the fast skip when a watermark already exists.
+        #
+        # This prevents a source that was processed before watermark
+        # tracking was introduced from permanently blocking watermark
+        # initialization.
+
         already_processed = (
             processed_source_repository
             .is_processed(
@@ -140,24 +204,33 @@ def main() -> None:
             )
         )
 
-        if already_processed:
+        if (
+            already_processed
+            and previous_watermark is not None
+        ):
             logger.warning(
                 "Order pipeline skipped because the exact "
-                "source content was already processed. "
-                "Source: %s | SHA-256: %s",
-                source_path.name,
+                "source content has already been processed. "
+                "Current watermark: %s | SHA-256: %s",
+                previous_watermark,
                 fingerprint.source_hash,
             )
 
             return
 
-        # ---------------------------------------------------------
-        # Pipeline audit
-        # ---------------------------------------------------------
+        if (
+            already_processed
+            and previous_watermark is None
+        ):
+            logger.warning(
+                "Source hash was processed previously, but "
+                "no watermark exists yet. The pipeline will "
+                "continue so watermark tracking can be initialized."
+            )
 
-        run_repository = PipelineRunRepository(
-            engine
-        )
+        # ---------------------------------------------------------
+        # 6. Start audit record
+        # ---------------------------------------------------------
 
         run_id = run_repository.start_run(
             batch_id=batch_id,
@@ -172,7 +245,7 @@ def main() -> None:
         )
 
         # ---------------------------------------------------------
-        # Build the Order pipeline
+        # 7. Build incremental Order pipeline
         # ---------------------------------------------------------
 
         pipeline = OrderPipeline(
@@ -204,26 +277,80 @@ def main() -> None:
             staging_loader=OrderStagingLoader(
                 engine
             ),
+            incremental_filter=OrderIncrementalFilter(),
         )
 
         # ---------------------------------------------------------
-        # Execute pipeline
+        # 8. Execute pipeline using previous watermark
         # ---------------------------------------------------------
 
         try:
             result = pipeline.run(
                 source_path=source_path,
                 batch_id=batch_id,
+                watermark=previous_watermark,
             )
+
+            logger.info(
+                "Incremental filtering complete. "
+                "Incremental records: %s",
+                len(
+                    result.incremental_records
+                ),
+            )
+
+            # -----------------------------------------------------
+            # 9. Advance watermark ONLY after successful processing
+            # -----------------------------------------------------
+            #
+            # If there were no new rows:
+            #
+            # next_watermark = None
+            #
+            # and we deliberately leave the existing watermark
+            # unchanged.
+
+            if result.next_watermark is not None:
+                watermark_repository.update_watermark(
+                    pipeline_name=PIPELINE_NAME,
+                    watermark_name=WATERMARK_NAME,
+                    watermark_value=(
+                        result.next_watermark
+                    ),
+                )
+
+                logger.info(
+                    "Order watermark advanced. "
+                    "Previous: %s | New: %s",
+                    previous_watermark,
+                    result.next_watermark,
+                )
+
+            else:
+                logger.info(
+                    "Order watermark unchanged because "
+                    "no new incremental records were processed."
+                )
+
+            # -----------------------------------------------------
+            # 10. Register successful file version
+            # -----------------------------------------------------
+
+            processed_source_repository.register_processed(
+                pipeline_name=PIPELINE_NAME,
+                source_name=source_path.name,
+                fingerprint=fingerprint,
+                batch_id=batch_id,
+            )
+
+            # -----------------------------------------------------
+            # 11. Mark pipeline audit SUCCESS
+            # -----------------------------------------------------
 
             total_records = (
                 len(result.valid_records)
                 + len(result.rejected_records)
             )
-
-            # -----------------------------------------------------
-            # Mark audit success
-            # -----------------------------------------------------
 
             run_repository.mark_success(
                 run_id=run_id,
@@ -237,25 +364,18 @@ def main() -> None:
                 excluded_records=0,
             )
 
-            # -----------------------------------------------------
-            # Register successful source
-            # -----------------------------------------------------
-
-            processed_source_repository.register_processed(
-                pipeline_name=PIPELINE_NAME,
-                source_name=source_path.name,
-                fingerprint=fingerprint,
-                batch_id=batch_id,
-            )
-
             logger.info(
                 "Order pipeline completed successfully. "
                 "Run ID: %s | Batch ID: %s | "
-                "Valid: %s | Rejected: %s | Loaded: %s",
+                "Source valid: %s | Rejected: %s | "
+                "Incremental: %s | Loaded: %s",
                 run_id,
                 batch_id,
                 len(result.valid_records),
                 len(result.rejected_records),
+                len(
+                    result.incremental_records
+                ),
                 result.loaded_records,
             )
 
@@ -271,6 +391,10 @@ def main() -> None:
                 )
 
         except Exception as exc:
+            # -----------------------------------------------------
+            # Watermark is NOT advanced on this failure path.
+            # -----------------------------------------------------
+
             run_repository.mark_failed(
                 run_id=run_id,
                 error_message=str(exc),
