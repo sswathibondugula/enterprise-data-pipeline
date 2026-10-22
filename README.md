@@ -49,47 +49,79 @@ The complete workflow can be executed locally or entirely through Docker Compose
 
 ---
 
-## Architecture
+## Dashboard Preview
+
+The project includes a Power BI reporting layer connected directly to the curated PostgreSQL reporting schema.
+
+### Executive Sales Overview
+
+Provides a business-facing view of sales performance, including:
+
+- Total sales
+- Completed sales
+- Total orders
+- Total units sold
+- Daily sales trend
+- Product-level sales performance
+- Customer-level sales performance
+
+![Executive Sales Overview](dashboards/screenshots/executive_sales_overview.png)
+
+### Pipeline Health & Data Quality
+
+Provides an operational data-engineering view of ETL execution and data quality, including:
+
+- Total pipeline runs
+- Successful and failed runs
+- Pipeline success rate
+- Records processed by pipeline
+- Execution status and batch information
+- Valid, rejected, and excluded record counts
+
+![Pipeline Health and Data Quality](dashboards/screenshots/pipeline_health_data_quality.png)
+
+The Power BI report file is available at:
+
+`dashboards/Enterprise_Data_Pipeline_Dashboard.pbix`
+
+## System Architecture
 
 ```mermaid
-flowchart TD
+flowchart LR
 
-    A[Source CSV Files] --> B[Raw Landing Layer]
+    A[Source CSV Files] --> B[Raw Landing]
 
     B --> C[Schema Validation]
-
     C --> D[Record Validation]
 
-    D -->|Invalid Records| E[Rejected Record Quarantine]
+    D -->|Invalid| E[Rejected Quarantine]
+    D -->|Valid| F[Cleaning & Transformation]
 
-    D -->|Valid Records| F[Cleaning]
+    F --> G[Incremental / Watermark Processing]
+    G --> H[PostgreSQL Staging]
 
-    F --> G[Transformation]
+    H --> I[Customer Dimension]
+    H --> J[Product Dimension]
+    H --> K[Date Dimension]
 
-    G --> H[Incremental / Watermark Filtering]
+    I --> L[Sales Fact]
+    J --> L
+    K --> L
+    H --> L
 
-    H --> I[PostgreSQL Staging]
+    L --> M[Reporting Views]
+    M --> N[Power BI]
 
-    I --> J[Customer Dimension]
-    I --> K[Product Dimension]
-    I --> L[Date Dimension]
-
-    J --> M[Sales Fact]
-    K --> M
-    L --> M
-    I --> M
-
-    M --> N[Reporting Views]
-
-    M --> O[Warehouse Data Quality Checks]
-
+    L --> O[Data Quality Checks]
     O --> P{Quality Gate}
 
     P -->|Pass| Q[Pipeline Success]
     P -->|Fail| R[Pipeline Stops]
-```
 
----
+    S[Audit & Logging] -.-> B
+    S -.-> H
+    S -.-> O
+```
 
 ## Key Features
 
