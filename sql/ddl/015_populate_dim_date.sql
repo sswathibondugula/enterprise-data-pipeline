@@ -1,0 +1,1 @@
+\i /project-sql/warehouse/populate_dim_date.sql

@@ -17,4 +17,9 @@ COPY config ./config
 COPY sql ./sql
 COPY data ./data
 
+# Runtime folders used by the ETL application.
+RUN mkdir -p /app/data/raw \
+    /app/data/rejected \
+    /app/logs
+
 CMD ["python", "scripts/run_full_pipeline.py"]

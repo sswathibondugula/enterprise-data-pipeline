@@ -13,7 +13,14 @@ services:
 
     volumes:
       - enterprise_etl_postgres_data:/var/lib/postgresql
+
+      # PostgreSQL automatically executes these files
+      # during first-time database initialization.
       - ./sql/ddl:/docker-entrypoint-initdb.d:ro
+
+      # Makes the complete SQL directory available so
+      # initialization scripts can reference warehouse SQL.
+      - ./sql:/project-sql:ro
 
     healthcheck:
       test:
@@ -26,6 +33,38 @@ services:
       retries: 10
 
     restart: unless-stopped
+
+  etl:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    image: enterprise-data-pipeline:0.1.0
+    container_name: enterprise-etl-app
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: enterprise_etl
+      DB_USER: etl_user
+      DB_PASSWORD: ${DOCKER_POSTGRES_PASSWORD}
+
+    volumes:
+      - ./data/raw:/app/data/raw
+      - ./data/rejected:/app/data/rejected
+      - ./logs:/app/logs
+
+    command:
+      [
+        "python",
+        "scripts/run_full_pipeline.py"
+      ]
+
+    restart: "no"
 
 volumes:
   enterprise_etl_postgres_data:
